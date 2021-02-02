@@ -1,0 +1,217 @@
+<html>
+<head>
+<script src="/traverse.js"></script>
+<style>
+body {
+  font-family: Sans-serif;
+  margin: 0;
+  color: rgba(0,0,0,0.8);
+  font-size: 14px;
+}
+.container {
+  max-width: 800px;
+  margin: 50px auto;
+}
+h1 {
+  padding: 0 10px;
+  margin: 0;
+}
+h1 a {
+  text-decoration: none;
+  color: rgba(0,0,0,0.8);
+}
+.item {
+  padding: 20px;
+  background: rgba(0,0,0,0.05);
+  margin: 10px;
+}
+.item input[type=text] {
+  width: 100%;
+  padding: 8px;
+  border-radius: 0;
+  border: 1px solid rgba(0,0,0,0.3);
+}
+.item input[type=checkbox] {
+  margin: 0;
+}
+.item label {
+  display: block;
+  padding-bottom: 10px;
+}
+button {
+  margin: 10px;
+  background: rgba(0,0,0,0.8);
+  color: white;
+  padding: 5px 10px;
+  border: none;
+}
+button.refresh {
+  margin: 0;
+  border-radius: 0;
+  background: none;
+  width: 35px;
+}
+a.back {
+  color: rgba(0,0,0,0.8);
+  padding: 15px;
+  display: inline-block;
+  font-size: 16px;
+}
+.input-group {
+  display: flex;
+  align-items: stretch;
+}
+.input-group input[type=text] {
+  flex-grow: 1;
+}
+</style>
+<script type='module'>
+import { fs, git, http, config } from "/offbase.js"
+const PROXY = 'https://cors.isomorphic-git.org'
+const HOME = "/home"
+const APP = "/bin"
+const render = (el, o, onSave) => {
+  let t = traverse(o)
+  let items = o.customize
+  let x = {}
+  let elements = items.map((item) => {
+    let { path, label, type } = item;
+    let p = path.split(".")
+    let val = t.get(p)
+    if (!val) val = ""
+    return { path: path, val: val, label: label, type: type }
+  })
+  // if the url field doesn't exist, display the current repo url
+  document.querySelector("#table").innerHTML = elements.map((item) => {
+    if (item.type && item.type.toLowerCase() === "boolean") {
+      if (item.val === true) {
+        return `<div class='item'><label>${item.label}</label><input id='${item.path}' type='checkbox' checked></div>`
+      } else {
+        return `<div class='item'><label>${item.label}</label><input id='${item.path}' type='checkbox'></div>`
+      }
+    } else {
+      if (item.path.startsWith("lib.") || item.path.startsWith("bin.")) {
+        return `<div class="item">
+<label>${item.label}</label>
+<div class='input-group'>
+<input id="${item.path}" type="text" value="${item.val}">
+<button class="refresh"><svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><title>refresh-glyph</title><path d="M66.71,287.91H0v160l47.36-43.59A255.71,255.71,0,0,0,255.9,512C386.54,512,494.19,414.15,510,287.91H445.29A192,192,0,0,1,95,360.6l79.08-72.69Zm0,0" fill="#434040"/><path d="M255.9,0C125.46,0,17.64,97.63,2,224H66.71a192,192,0,0,1,353.26-68l-68,68H512v-160l-45.78,45.78A255.89,255.89,0,0,0,255.9,0Zm0,0" fill="#434040"/></svg></button>
+</div>
+</div>`
+      } else {
+        return `<div class="item">
+<label>${item.label}</label>
+<div class='input-group'>
+<input id="${item.path}" type="text" value="${item.val}">
+</div>
+</div>`
+      }
+    }
+  }).join("") + "<button id='submit'>Done</button"
+  document.querySelector("#table").addEventListener("click", async (e) => {
+    if (e.target.id === 'submit' || e.target.closest("#submit")) {
+      let changed = {}
+      document.querySelectorAll(".item input").forEach((el) => {
+        // check if changed
+        let i = elements.filter((item) => {
+          return item.path === el.id
+        })
+        let type = i[0].type
+        if (type) type = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase() // capitalize
+        let val;
+        if (["Number", "Boolean", "String"].includes(type)) {
+          let result = (type === "Boolean" ? el.checked : el.value)
+          val = window[type](result)
+        } else {
+          val = el.value
+        }
+        let keyPath = el.id.split(".")
+        let original = t.get(keyPath)
+        if (original !== val) {
+          changed[el.id] = { original: original, updated: val }
+          t.set(keyPath, val)
+        }
+      })
+      onSave({
+        value: t.value,
+        changed: changed
+      })
+    } else if (e.target.className === "refresh" || e.target.closest(".refresh")) {
+      let el = e.target.closest(".input-group").querySelector("input[type=text]")
+      await reclone({
+        [el.id]: {
+          updated: el.value
+        }
+      })
+      alert("successfully refreshed the package.")
+      location.href = location.href;
+    }
+  })
+}
+const reclone = async (changed) => {
+  for(let key in changed) {
+    let type;
+    if (key.startsWith("lib.")) {
+      type = "lib"
+    } else if (key.startsWith("bin.")) {
+      type = "bin"
+    }
+    if (type) {
+      let c = changed[key]
+      let requireKey
+      if (type === 'lib') {
+        requireKey = "/" + type + "/" + key.split(".")[1]
+      } else if (type === 'bin') {
+        requireKey = "/bin"
+      }
+      let newUrl = c.updated
+      let garbage = "/$garbage"
+      // move old folder to a "$garbage" folder
+      console.log("renaming", requireKey, "to", garbage)
+      try {
+        await fs.promises.rename(requireKey, garbage)
+      } catch (e) { }
+      console.log("rename finished")
+      // clone into new folder
+      console.log("cloning", requireKey, "at", newUrl)
+      if (newUrl.length > 0) {
+        await git.clone({ fs: fs, http, corsProxy: PROXY, singleBranch: true, ref: "main",
+          dir: requireKey,
+          url: newUrl
+        })
+        let config = await git.getConfig({ fs, dir: HOME, path: 'remote.origin.url', })
+        await git.setConfig({ fs, dir: HOME, path: 'remote.upstream.url', value: config })
+        await git.setConfig({ fs, dir: HOME, path: 'remote.upstream.fetch', value: "+refs/heads/*:refs/remotes/upstream/*" })
+        console.log("clone finished")
+      }
+    }
+  }
+}
+document.addEventListener("DOMContentLoaded", async (e) => {
+  let str = await fs.promises.readFile(HOME + "/offbase.json", "utf8").catch((e) => { })
+  if (str) {
+    let j = JSON.parse(str)
+    render(document.querySelector("#table"), j, async (res) => {
+      if (Object.keys(res.changed).length > 0) {
+        await fs.promises.writeFile(HOME + "/offbase.json", JSON.stringify(res.value))
+        await reclone(res.changed)
+        setTimeout(() => {
+          location.href = location.href
+        }, 1000)
+      } else {
+        console.log("no change")
+      }
+    })
+  }
+})
+</script>
+</head>
+<body>
+<div class='container'>
+<h1>Settings</h1>
+<a class='back' href=".">back</a>
+<div id='table'></div>
+<pre></pre>
+</div>
+</body>
+</html>
