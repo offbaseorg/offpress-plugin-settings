@@ -107,7 +107,7 @@ const render = (el, o, onSave) => {
 </div>`
       }
     }
-  }).join("") + "<button id='submit'>Done</button"
+  }).join("") + "<button id='submit'>Save</button"
   document.querySelector("#table").addEventListener("click", async (e) => {
     if (e.target.id === 'submit' || e.target.closest("#submit")) {
       let changed = {}
